@@ -1,7 +1,6 @@
-# app/map_service.py
 import os
 import httpx
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
 import pathlib
 
@@ -9,35 +8,58 @@ import pathlib
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 load_dotenv(dotenv_path=ROOT / ".env")
 
-# 따옴표/공백 제거
 KAKAO_API_KEY = (os.getenv("KAKAO_API_KEY") or "").strip()
 HEADERS = {"Authorization": f"KakaoAK {KAKAO_API_KEY}"} if KAKAO_API_KEY else None
 
 KAKAO_ADDR_URL = "https://dapi.kakao.com/v2/local/search/address.json"
+KAKAO_KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 
-print("[KAKAO] KEY loaded? ", bool(KAKAO_API_KEY), "len=", len(KAKAO_API_KEY) if KAKAO_API_KEY else 0)
-print("[KAKAO] .env path used =", (ROOT / ".env"))
-
+TIMEOUT = httpx.Timeout(10.0)
 
 async def geocode_address(query: str) -> Optional[Dict[str, Any]]:
-    """
-    '서울 중랑구' → {'x': 경도, 'y': 위도, 'address': {...}} (실패 시 None)
-    """
     if not HEADERS:
         print("[KAKAO] Missing KAKAO_API_KEY")
         return None
-
-    timeout = httpx.Timeout(10.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         r = await client.get(KAKAO_ADDR_URL, headers=HEADERS, params={"query": query})
-
+        r.raise_for_status()
         docs = r.json().get("documents", [])
         if not docs:
             return None
+        doc = docs[0]
+        addr_obj = doc.get("road_address") or doc.get("address") or {}
+        addr_text = addr_obj.get("address_name") or query
+        return {"x": float(doc["x"]), "y": float(doc["y"]), "address": addr_text}
 
-        doc = docs[0]  # 가장 적합한 결과 하나 사용
-        return {
-            "x": float(doc["x"]),  # 경도
-            "y": float(doc["y"]),  # 위도
-            "address": doc.get("address") or doc.get("road_address"),
+async def search_places_around(
+    x: float, y: float, keyword: str, radius: int, size: int, page: int, sort: str
+) -> List[Dict[str, Any]]:
+    if not HEADERS:
+        print("[KAKAO] Missing KAKAO_API_KEY")
+        return []
+    params = {
+        "query": keyword, "x": x, "y": y,
+        "radius": radius, "size": size, "page": page, "sort": sort,
+    }
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        r = await client.get(KAKAO_KEYWORD_URL, headers=HEADERS, params=params)
+        r.raise_for_status()
+        docs = r.json().get("documents", [])
+
+    return [
+        {
+            "id": d.get("id"),
+            "place_name": d.get("place_name"),
+            "category_name": d.get("category_name"),
+            "category_group_code": d.get("category_group_code"),
+            "category_group_name": d.get("category_group_name"),
+            "phone": d.get("phone"),
+            "address_name": d.get("address_name"),
+            "road_address_name": d.get("road_address_name"),
+            "x": float(d["x"]) if d.get("x") else None,
+            "y": float(d["y"]) if d.get("y") else None,
+            "place_url": d.get("place_url"),
+            "distance": int(d["distance"]) if d.get("distance") else None,
         }
+        for d in docs
+    ]

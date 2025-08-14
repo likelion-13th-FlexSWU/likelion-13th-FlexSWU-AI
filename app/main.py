@@ -2,12 +2,12 @@
 
 from fastapi import FastAPI, HTTPException, Query
 from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
+import asyncio
 from typing import Dict, Any, List
 
 # ai_service는 그대로 사용
 from .ai_service import get_gpt_embedding, generate_place_description
-from .map_service import geocode_address
+from .map_service import geocode_address, search_places_around
 from .models import UserKeywords
 
 app = FastAPI()
@@ -76,12 +76,50 @@ async def get_recommendations(user_input: UserKeywords):
         raise HTTPException(status_code=500, detail=f"내부 서버 오류: {e}")
     
 
+def _dedup(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen = set()
+    out = []
+    for it in items:
+        key = it.get("id") or f"{it.get('place_name')}|{it.get('road_address_name') or it.get('address_name')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out
+
+# /geocode 엔드포인트 변경
 @app.get("/geocode")
-async def geocode(query: str = Query(..., min_length=1, description="예: '서울 중랑구'")):
-    result = await geocode_address(query)
-    if not result:
-        raise HTTPException(status_code=404, detail="주소를 찾지 못했거나 API 키가 없습니다.")
-    return result
+async def geocode(
+    query: str = Query(..., description="예: 서울 중랑구"),
+    keywords: List[str] = Query(..., description="예: keywords=카페&keywords=빵집", min_items=1),
+    radius: int = Query(1500, ge=10, le=20000, description="검색 반경(m)"),
+    size: int = Query(15, ge=1, le=15, description="키워드별 최대 15"),
+    page: int = Query(1, ge=1, description="페이지"),
+    sort: str = Query("accuracy", regex="^(accuracy|distance)$", description="정렬")  # ✅ regex로 검증
+):
+    geo = await geocode_address(query)
+    if not geo:
+        raise HTTPException(status_code=404, detail="지오코딩 결과가 없습니다. 주소를 확인하세요.")
+    x, y = geo["x"], geo["y"]
+
+    tasks = [
+        search_places_around(x, y, kw, radius=radius, size=size, page=page, sort=sort)
+        for kw in keywords
+    ]
+    results_list = await asyncio.gather(*tasks)
+
+    per_keyword = {kw: _dedup(res) for kw, res in zip(keywords, results_list)}
+    merged = _dedup([it for res in results_list for it in res])
+
+    return {
+        "query": query,
+        "center": {"x": x, "y": y, "address": geo["address"]},
+        "keywords": keywords,
+        "radius_m": radius,
+        "sort": sort,
+        "per_keyword": per_keyword,
+        "all": merged,
+    }
 
 
 @app.get("/")
