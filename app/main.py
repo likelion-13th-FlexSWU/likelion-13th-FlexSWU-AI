@@ -1,12 +1,13 @@
 # app/main.py
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from typing import Dict, Any, List
 
 # ai_service는 그대로 사용
 from .ai_service import get_gpt_embedding, generate_place_description
+from .map_service import geocode_address
 from .models import UserKeywords
 
 app = FastAPI()
@@ -73,6 +74,15 @@ async def get_recommendations(user_input: UserKeywords):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"내부 서버 오류: {e}")
+    
+
+@app.get("/geocode")
+async def geocode(query: str = Query(..., min_length=1, description="예: '서울 중랑구'")):
+    result = await geocode_address(query)
+    if not result:
+        raise HTTPException(status_code=404, detail="주소를 찾지 못했거나 API 키가 없습니다.")
+    return result
+
 
 @app.get("/")
 def read_root():
