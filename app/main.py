@@ -36,16 +36,22 @@ async def get_recommendations(user_input: RecommendationRequest):
         
         x, y = geo_info["x"], geo_info["y"]
 
-        # 2. 카카오 API로 30개 장소 검색
-        places = await search_places_around(
-            x=x,
-            y=y,
+        # 2. rect-sweep으로 장소 검색 (기존 로직 대체)
+        places = await search_places_rect_sweep(
+            center_x=x,
+            center_y=y,
             keyword=place_category,
-            radius=1500, # 반경 1.5km
-            size=10,     # 총 30개 장소 검색
-            page=1,
-            sort="distance"
+            category_code=None, # 이 예시에서는 keyword만 사용
+            total_limit=200,    # 총 200개 검색
+            span_m=20000,
+            step_m=4000,
+            concurrency=8,
+            restrict_by_query_text=search_query,
         )
+
+        # 30개 랜덤 추출 > 랜덤 제외하려면 이 부분 주석
+        if len(places) > 30:
+            places = random.sample(places, 30)
         
         if not places:
             raise HTTPException(status_code=404, detail="검색된 장소가 없습니다. 키워드를 변경하거나 범위를 넓혀보세요.")
