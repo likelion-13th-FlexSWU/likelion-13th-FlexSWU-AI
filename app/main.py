@@ -95,7 +95,7 @@ async def geocode(
     radius: int = Query(1500, ge=10, le=20000, description="검색 반경(m)"),
     size: int = Query(15, ge=1, le=15, description="키워드별 최대 15"),
     page: int = Query(1, ge=1, description="페이지"),
-    sort: str = Query("accuracy", regex="^(accuracy|distance)$", description="정렬")  # ✅ regex로 검증
+    sort: str = Query("accuracy", regex="^(accuracy|distance)$", description="정렬")
 ):
     geo = await geocode_address(query)
     if not geo:

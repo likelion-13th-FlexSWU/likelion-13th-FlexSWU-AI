@@ -29,6 +29,8 @@ async def geocode_address(query: str) -> Optional[Dict[str, Any]]:
         doc = docs[0]
         addr_obj = doc.get("road_address") or doc.get("address") or {}
         addr_text = addr_obj.get("address_name") or query
+        print( float(doc["x"]))
+        print( float(doc["y"]))
         return {"x": float(doc["x"]), "y": float(doc["y"]), "address": addr_text}
 
 async def search_places_around(
