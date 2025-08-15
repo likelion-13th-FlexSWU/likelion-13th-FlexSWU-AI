@@ -10,72 +10,84 @@ import random
 from .ai_service import get_gpt_embedding, generate_place_description
 from .map_service import geocode_address, search_places_around, search_places_rect_sweep
 from .models import UserKeywords
+from .models import UserKeywordsWithLocation
+from .models import RecommendationRequest
+
 
 app = FastAPI()
-
-# 카카오 지도 API 호출을 대신할 가짜 데이터
-MOCK_PLACES = [
-    {
-        "place_name": "고즈넉한 카페",
-        "category_name": "카페",
-        "address_name": "서울특별시 종로구 어딘가"
-    },
-    {
-        "place_name": "미술관 옆 갤러리",
-        "category_name": "문화, 예술",
-        "address_name": "서울특별시 중구 어딘가"
-    },
-    {
-        "place_name": "숲속 한정식집",
-        "category_name": "음식점 > 한정식",
-        "address_name": "서울특별시 강남구 어딘가"
-    }
-]
-
-# 카카오 지도 API 호출 함수 대신 이 함수 사용
-async def mock_search_places_kakao(keywords: List[str]):
-    return MOCK_PLACES
 
 def calculate_cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
     return cosine_similarity([vec1], [vec2])[0][0]
 
 @app.post("/recommendations", response_model=Dict[str, Any])
-async def get_recommendations(user_input: UserKeywords):
+async def get_recommendations(user_input: RecommendationRequest):
     try:
-        keywords = user_input.keywords
-        if not keywords:
-            raise HTTPException(status_code=400, detail="키워드를 제공해주세요.")
-
-        # 1. 사용자 키워드 임베딩
-        user_keyword_embedding = await get_gpt_embedding(keywords)
+        user_mood_keywords = user_input.mood_keywords
+        place_category = user_input.place_category
+        search_query = user_input.search_query
         
-        # 2. 가상의 장소 데이터 사용
-        places = await mock_search_places_kakao(keywords)
+        if not user_mood_keywords or not place_category or not search_query:
+            raise HTTPException(status_code=400, detail="모든 필드를 제공해주세요.")
 
-        recommendations = []
-        for place in places:
-            # 3. GPT로 장소 설명 생성 및 임베딩
+        # 1. 주소 지오코딩
+        geo_info = await geocode_address(search_query)
+        if not geo_info:
+            raise HTTPException(status_code=404, detail="지오코딩 결과가 없습니다. 주소를 확인하세요.")
+        
+        x, y = geo_info["x"], geo_info["y"]
+
+        # 2. 카카오 API로 30개 장소 검색
+        places = await search_places_around(
+            x=x,
+            y=y,
+            keyword=place_category,
+            radius=1500, # 반경 1.5km
+            size=10,     # 총 30개 장소 검색
+            page=1,
+            sort="distance"
+        )
+        
+        if not places:
+            raise HTTPException(status_code=404, detail="검색된 장소가 없습니다. 키워드를 변경하거나 범위를 넓혀보세요.")
+
+        # 3. 사용자 무드 키워드 임베딩
+        user_keyword_embedding = await get_gpt_embedding(user_mood_keywords)
+
+        # 4. 각 장소에 대해 GPT 설명 생성 및 임베딩을 비동기적으로 처리
+        async def process_place(place):
             description = await generate_place_description(place)
             description_embedding = await get_gpt_embedding(description)
-            
-            # 4. 유사도 계산
-            similarity_score = calculate_cosine_similarity(user_keyword_embedding, description_embedding)
-            
-            recommendations.append({
+            return {
                 "place_name": place.get("place_name"),
                 "category_name": place.get("category_name"),
                 "address_name": place.get("address_name"),
                 "description": description,
+                "embedding": description_embedding
+            }
+        
+        tasks = [process_place(place) for place in places]
+        processed_places = await asyncio.gather(*tasks)
+
+        # 5. 유사도 계산 및 정렬
+        recommendations = []
+        for p in processed_places:
+            similarity_score = calculate_cosine_similarity(user_keyword_embedding, p["embedding"])
+            recommendations.append({
+                "place_name": p["place_name"],
+                "category_name": p["category_name"],
+                "address_name": p["address_name"],
+                "description": p["description"],
                 "similarity_score": similarity_score
             })
             
-        # 5. 유사도 점수 정렬 및 Top-5 반환
+        # 6. 유사도 점수 내림차순 정렬 및 상위 5개 반환
         sorted_recommendations = sorted(recommendations, key=lambda x: x["similarity_score"], reverse=True)
         return {"recommendations": sorted_recommendations[:5]}
 
+    except HTTPException as e:
+        raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"내부 서버 오류: {e}")
-    
 
 def _dedup(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     seen = set()
