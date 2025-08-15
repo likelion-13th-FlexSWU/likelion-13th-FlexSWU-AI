@@ -3,11 +3,12 @@
 from fastapi import FastAPI, HTTPException, Query
 from sklearn.metrics.pairwise import cosine_similarity
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Literal
+import random
 
 # ai_service는 그대로 사용
 from .ai_service import get_gpt_embedding, generate_place_description
-from .map_service import geocode_address, search_places_around
+from .map_service import geocode_address, search_places_around, search_places_rect_sweep
 from .models import UserKeywords
 
 app = FastAPI()
@@ -87,7 +88,6 @@ def _dedup(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         out.append(it)
     return out
 
-# /geocode 엔드포인트 변경
 @app.get("/geocode")
 async def geocode(
     query: str = Query(..., description="예: 서울 중랑구"),
@@ -95,7 +95,7 @@ async def geocode(
     radius: int = Query(1500, ge=10, le=20000, description="검색 반경(m)"),
     size: int = Query(15, ge=1, le=15, description="키워드별 최대 15"),
     page: int = Query(1, ge=1, description="페이지"),
-    sort: str = Query("accuracy", regex="^(accuracy|distance)$", description="정렬")
+    sort: Literal["accuracy", "distance"] = Query("accuracy", description="정렬")
 ):
     geo = await geocode_address(query)
     if not geo:
@@ -121,6 +121,50 @@ async def geocode(
         "all": merged,
     }
 
+
+@app.get("/rect-sweep")
+async def rect_sweep(
+    query: str = Query(..., description="예: 서울 종로구"),
+    keyword: Optional[str] = Query(None, description="예: 카페 (없으면 카테고리로만 탐색)"),
+    category_code: Optional[str] = Query(None, description="예: 카페 CE7, 편의점 CS2"),
+    total_limit: int = Query(200, ge=1, le=1000),
+    span_m: int = Query(20000, ge=1000, le=40000, description="전체 박스 크기(미터)"),
+    step_m: int = Query(4000, ge=500, le=10000, description="타일 간격(미터)"),
+    concurrency: int = Query(8, ge=1, le=32),
+):
+    # 1) 중심 좌표 구하기
+    geo = await geocode_address(query)
+    if not geo:
+        raise HTTPException(status_code=404, detail="지오코딩 결과 없음")
+    x, y = geo["x"], geo["y"]
+
+    # 2) rect 스윕 호출
+    places = await search_places_rect_sweep(
+        center_x=x,
+        center_y=y,
+        keyword=keyword,
+        category_code=category_code,
+        total_limit=total_limit,
+        span_m=span_m,
+        step_m=step_m,
+        concurrency=concurrency,
+        restrict_by_query_text=query,
+    )
+
+    # 30개 랜덤 추출 > 랜덤 제외하려면 이 부분 주석
+    if len(places) > 30:
+        places = random.sample(places, 30)
+
+    return {
+        "query": query,
+        "center": {"x": x, "y": y, "address": geo["address"]},
+        "keyword": keyword,
+        "category_code": category_code,
+        "span_m": span_m,
+        "step_m": step_m,
+        "total": len(places),
+        "places": places,
+    }
 
 @app.get("/")
 def read_root():
