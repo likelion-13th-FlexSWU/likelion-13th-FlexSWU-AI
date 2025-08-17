@@ -61,7 +61,7 @@ async def get_recommendations(user_input: RecommendationRequest):
 
         # 4. 각 장소에 대해 GPT 설명 생성 및 임베딩을 비동기적으로 처리
         async def process_place(place):
-            description = await generate_place_description(place)
+            description = await generate_place_description(place, user_mood_keywords)
             description_embedding = await get_gpt_embedding(description)
             return {
                 "place_name": place.get("place_name"),
