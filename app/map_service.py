@@ -3,6 +3,7 @@ import httpx
 import math
 import asyncio
 import re
+import random
 from typing import Optional, Dict, Any, List, Tuple
 from dotenv import load_dotenv
 import pathlib
@@ -266,6 +267,7 @@ async def search_places_rect_sweep(
     category_code: Optional[str] = None,  # 예: 카페 "CE7"
     concurrency: int = 8,            # 동시에 돌릴 타일 작업 수(세마포어로 제한)
     restrict_by_query_text: Optional[str] = None,  # 서울 -구면 -구 필터
+    sample_tile_count: Optional[int] = 60, # 랜덤 타일 개수 조정용
 ) -> List[Dict[str, Any]]:
     """
     큰 반경에서도 적게 나올 때, rect 타일로 넓은 구역을 병렬로 긁어서 리콜을 크게 확보한다.
@@ -277,9 +279,14 @@ async def search_places_rect_sweep(
         print("[KAKAO] Missing KAKAO_API_KEY")
         return []
 
-    # 1) 타일 생성 (중심에 가까운 타일부터)
+    # 1) 타일 생성
     rects = _make_rect_tiles(center_x, center_y, center_y, span_m, step_m)
 
+    # 2) 랜덤 일부만 사용할 경우
+    if sample_tile_count and len(rects) > sample_tile_count:
+        rects = random.sample(rects, sample_tile_count)
+
+    # 3) 결과 저장 리스트 (중복 선언 제거)
     results: List[Dict[str, Any]] = []
     seen = set()
 

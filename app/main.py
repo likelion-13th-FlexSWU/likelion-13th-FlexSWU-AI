@@ -38,13 +38,15 @@ async def get_recommendations(user_input: RecommendationRequest):
 
         sgg, dong = extract_sgg_and_optional_dong(geo_info["address"])
 
-        # 구/동 여부에 따라 범위 설정
+        # 구/동 여부에 따라 범위 설정 / 더 세부적으로 하고 싶으면 step_m을 더 작은 사각형으로 쪼개면 됨
         if dong:
             span_m = 10000  # 동 단위이면 더 좁은 범위
-            step_m = 2000
+            step_m = 1000
+            sample_tile_count = 30
         else:
             span_m = 20000  # 구 단위이면 넓은 범위
-            step_m = 4000
+            step_m = 1000
+            sample_tile_count = 60
 
         # 2. rect-sweep으로 장소 검색 (기존 로직 대체)
         places = await search_places_rect_sweep(
@@ -52,11 +54,12 @@ async def get_recommendations(user_input: RecommendationRequest):
             center_y=y,
             keyword=place_category,
             category_code=None, # 이 예시에서는 keyword만 사용
-            total_limit=200,    # 총 200개 검색
+            total_limit=500,    # 몇 개 검색할 건지?
             span_m=span_m,
             step_m=step_m,
             concurrency=8,
             restrict_by_query_text=search_query,
+            sample_tile_count=sample_tile_count
         )
 
         # 30개 랜덤 추출 > 랜덤 제외하려면 이 부분 주석
@@ -159,6 +162,7 @@ async def rect_sweep(
     span_m: int = Query(20000, ge=1000, le=40000, description="전체 박스 크기(미터)"),
     step_m: int = Query(4000, ge=500, le=10000, description="타일 간격(미터)"),
     concurrency: int = Query(8, ge=1, le=32),
+    sample_tile_count: Optional[int] = Query(None, ge=1, le=500, description="타일 중 샘플링 개수 (예: 60개만 선택)")
 ):
     # 1) 중심 좌표 구하기
     geo = await geocode_address(query)
@@ -177,6 +181,7 @@ async def rect_sweep(
         step_m=step_m,
         concurrency=concurrency,
         restrict_by_query_text=query,
+        sample_tile_count=sample_tile_count
     )
 
     # 30개 랜덤 추출 > 랜덤 제외하려면 이 부분 주석
