@@ -7,8 +7,10 @@ from typing import Optional, Dict, Any, List, Tuple
 from dotenv import load_dotenv
 import pathlib
 
+# -구 형태의 문자열을 찾는다
 _GU_PAT = re.compile(r"([가-힣A-Za-z]+구)")
 
+# -구 단위 행정구 이름 뽑아 냄
 def _extract_gu_from_text(text: Optional[str]) -> Optional[str]:
     if not text:
         return None
@@ -20,6 +22,7 @@ def _extract_gu_from_text(text: Optional[str]) -> Optional[str]:
     m = _GU_PAT.search(str(text).replace(" ", ""))
     return m.group(1) if m else None
 
+# -구가 포함되어 있어야 최종 return되게 설정
 def _place_in_gu(place: Dict[str, Any], target_gu: str) -> bool:
     addr = f"{place.get('road_address_name','')} {place.get('address_name','')}"
     return target_gu in addr
@@ -35,9 +38,9 @@ KAKAO_ADDR_URL = "https://dapi.kakao.com/v2/local/search/address.json"
 KAKAO_KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 
 
-
 TIMEOUT = httpx.Timeout(10.0)
 
+# 카카오 응답 documents 원본에서 필요한 필드만 추려서 dict 리스트로 변환 > 최종 리스트, api 응답값
 def _normalize_docs(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out = []
     for d in docs:
@@ -60,7 +63,7 @@ def _normalize_docs(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             pass
     return out
 
-# ===== 1) 반경+페이지네이션으로 원하는 개수(total_limit)까지 모으기 =====
+# ===== 1) 반경+페이지네이션으로 원하는 개수(total_limit)까지 모으기 > 2번의 대안으로 존재 =====
 async def search_places_paged_around(
     x: float,
     y: float,
@@ -137,14 +140,17 @@ KAKAO_CATEGORY_URL = "https://dapi.kakao.com/v2/local/search/category.json"
 PER_PAGE = 15
 MAX_PAGE = 45
 
+# 미터 > 위경도 환산
 def _meters_to_deg(lat: float, meters: float) -> Tuple[float, float]:
     dlat = meters / 111_000.0
     dlon = meters / (111_320.0 * math.cos(math.radians(lat)))
     return dlat, dlon
 
+# 중심을 포함하는 큰 박스를 타일로 분할한다. 가까운 타일부터
+# 중심(cx, cy)을 포함하는 큰 박스를 span_m 크기로 만듬 > step_m 단위의 작은 타일로 분할
 def _make_rect_tiles(cx: float, cy: float, lat_for_deg: float, span_m: int, step_m: int) -> List[Tuple[float, float, float, float]]:
-    dlat_span, dlon_span = _meters_to_deg(lat_for_deg, span_m / 2)
-    dlat_step, dlon_step = _meters_to_deg(lat_for_deg, step_m)
+    dlat_span, dlon_span = _meters_to_deg(lat_for_deg, span_m / 2) # 전체 박스
+    dlat_step, dlon_step = _meters_to_deg(lat_for_deg, step_m) # 타일 크기
     min_y, max_y = cy - dlat_span, cy + dlat_span
     min_x, max_x = cx - dlon_span, cx + dlon_span
 
@@ -159,10 +165,11 @@ def _make_rect_tiles(cx: float, cy: float, lat_for_deg: float, span_m: int, step
             x += dlon_step
         y += dlat_step
 
-    # 중앙에 가까운 타일부터
+    # 중앙에 가까운 타일부터 > 중심부 우선 검색
     rects.sort(key=lambda r: abs((r[0]+r[2])/2 - cx) + abs((r[1]+r[3])/2 - cy))
     return rects
 
+# 페이지네이션을 돌려 끝까지 모음(한 페이지에 최대 15개씩만 줌..)
 async def _paged_fetch(client: httpx.AsyncClient, url: str, base_params: Dict[str, Any]) -> List[Dict[str, Any]]:
     acc: List[Dict[str, Any]] = []
     for page in range(1, MAX_PAGE + 1):
@@ -179,6 +186,8 @@ async def _paged_fetch(client: httpx.AsyncClient, url: str, base_params: Dict[st
             break
     return _normalize_docs(acc)
 
+# 하나의 타일에 대해  검색 실행
+# paged_fetch로 끝까지 긁어 옴
 async def _fetch_tile(client: httpx.AsyncClient, rect: Tuple[float, float, float, float], keyword: Optional[str], category_code: Optional[str]) -> List[Dict[str, Any]]:
     x1, y1, x2, y2 = rect
     rect_str = f"{x1},{y1},{x2},{y2}"
@@ -194,61 +203,93 @@ async def _fetch_tile(client: httpx.AsyncClient, rect: Tuple[float, float, float
     seen = set()
     for part in parts:
         for it in part:
-            pid = it.get("id")
+            pid = it.get("id") # id 기준으로 중복 제거 후 반환
             if pid and pid not in seen:
                 seen.add(pid)
                 merged.append(it)
     return merged
 
+# 중심 좌표를 기준으로 큰 박스를 작을 타일로 쪼개서 각 타일마다 검색을 비동기 병렬로 긁어 모음
 async def search_places_rect_sweep(
     center_x: float,
     center_y: float,
     keyword: Optional[str],
-    total_limit: int = 150,
-    span_m: int = 20000,        # 전체 박스 크기(예: 20km)
-    step_m: int = 4000,         # 타일 간격
+    total_limit: int = 150,          # 최대 수집 개수
+    span_m: int = 20000,             # 전체 박스 크기(예: 20km)
+    step_m: int = 4000,              # 타일 간격
     category_code: Optional[str] = None,  # 예: 카페 "CE7"
-    concurrency: int = 8,
-    restrict_by_query_text: Optional[str] = None,
+    concurrency: int = 8,            # 동시에 돌릴 타일 작업 수(세마포어로 제한)
+    restrict_by_query_text: Optional[str] = None,  # 서울 -구면 -구 필터
 ) -> List[Dict[str, Any]]:
     """
-    큰 반경에서도 적게 나올 때, rect 타일로 넓은 구역을 병렬로 긁어서 리콜을 크게 확보.
+    큰 반경에서도 적게 나올 때, rect 타일로 넓은 구역을 병렬로 긁어서 리콜을 크게 확보한다.
+    - 동시 실행 제대로 사용
+    - total_limit 도달 시 남은 태스크 취소
+    - results/seen 접근은 락으로 보호
     """
     if not HEADERS:
         print("[KAKAO] Missing KAKAO_API_KEY")
         return []
 
+    # 1) 타일 생성 (중심에 가까운 타일부터)
     rects = _make_rect_tiles(center_x, center_y, center_y, span_m, step_m)
+
     results: List[Dict[str, Any]] = []
     seen = set()
+
+    # 동시성 제어용 세마포어 + 결과/중복 보호용 락
     sem = asyncio.Semaphore(concurrency)
+    lock = asyncio.Lock()
 
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        async def worker(rect):
-            nonlocal results
-            if len(results) >= total_limit:
-                return
-            async with sem:
-                items = await _fetch_tile(client, rect, keyword, category_code)
-                for it in items:
-                    pid = it.get("id")
-                    if pid and pid not in seen:
-                        seen.add(pid)
-                        results.append(it)
-                        if len(results) >= total_limit:
-                            break
 
-        for rect in rects:
-            if len(results) >= total_limit:
-                break
-            await worker(rect)
+        # 타일 하나씩 처리
+        async def worker(rect):
+            # 세마포어로 동시 실행 개수 제한
+            async with sem:
+                # 타일 1개 조회
+                items = await _fetch_tile(client, rect, keyword, category_code)
+                # 결과/중복 체크는 락으로 보호
+                async with lock:
+                    if len(results) >= total_limit:
+                        return
+                    for it in items:
+                        pid = it.get("id")
+                        if pid and pid not in seen:
+                            seen.add(pid)
+                            results.append(it)
+                            if len(results) >= total_limit:
+                                break
+
+        # 2) 비동기 태스크 생성
+        tasks = [asyncio.create_task(worker(rect)) for rect in rects]
+
+        # 3) as_completed로 조기 종료 (limit 차자마자 나머지 태스크 취소)
+        try:
+            for fut in asyncio.as_completed(tasks):
+                await fut
+                # limit 도달했으면 바로 종료
+                if len(results) >= total_limit:
+                    break
+        finally:
+            # 남은 태스크는 취소
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            # 취소된 태스크들에서 발생할 수 있는 CancelledError 흡수
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 4) (선택) -구 필터 후처리
     if restrict_by_query_text:
-        gu = _extract_gu_from_text(restrict_by_query_text)
+        gu = _extract_gu_from_text(restrict_by_query_text)  # "서울 중랑구" -> "중랑구"
         if gu:
             results = [p for p in results if _place_in_gu(p, gu)]
 
+    # 5) 최대 개수만 리턴
     return results[:total_limit]
 
+
+# 텍스트 주소 > 위도 경도 반환
 async def geocode_address(query: str) -> Optional[Dict[str, Any]]:
     if not HEADERS:
         print("[KAKAO] Missing KAKAO_API_KEY")
@@ -264,6 +305,7 @@ async def geocode_address(query: str) -> Optional[Dict[str, Any]]:
         addr_text = addr_obj.get("address_name") or query
         return {"x": float(doc["x"]), "y": float(doc["y"]), "address": addr_text}
 
+# 좌표 주변 반경에서 키워드 1회 호출로 결과를 가져온다 > /geocode에서 사용함
 async def search_places_around(
     x: float, y: float, keyword: str, radius: int, size: int, page: int, sort: str
 ) -> List[Dict[str, Any]]:
