@@ -13,6 +13,13 @@ _SGG_RE = re.compile(r"([가-힣A-Za-z]+(?:시|군|구))")
 # 동/읍/면/리/ ~가 (예: 신내동, 현곡면, 삼향읍, 장충동1가)
 _DONG_RE = re.compile(r"([가-힣A-Za-z0-9]+(?:동|읍|면|리)(?:\d*가)?)")
 
+EXCLUDE_KEYWORDS = ["컴포즈", "투썸", "빽다방", "스타벅스", "메가MGC"]
+
+# 체인점 제외
+def _is_excluded_place(place: dict) -> bool:
+    name = place.get("place_name", "")
+    return any(keyword in name for keyword in EXCLUDE_KEYWORDS)
+
 # 시/군/구, 동/읍/면/리/..가 추출 (공백 유지한 토큰 기반)
 def extract_sgg_and_optional_dong(text: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     if not text:
@@ -358,7 +365,10 @@ async def search_places_rect_sweep(
             results = filtered
         print(f"[DEBUG] 필터 전={before}, 후={len(results)}")
 
-
+    # 5) 체인점 제외 필터
+    # before_exclude = len(results)
+    results = [p for p in results if not _is_excluded_place(p)]
+    # print(f"[DEBUG] 체인점 필터 전={before_exclude}, 후={len(results)}")
 
     # 5) 최대 개수만 리턴
     return results[:total_limit]
