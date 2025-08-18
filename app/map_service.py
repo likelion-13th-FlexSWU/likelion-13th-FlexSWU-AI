@@ -7,20 +7,66 @@ from typing import Optional, Dict, Any, List, Tuple
 from dotenv import load_dotenv
 import pathlib
 
-# -구 형태의 문자열을 찾는다
-_GU_PAT = re.compile(r"([가-힣A-Za-z]+구)")
+# 시/군/구 (예: 강남구, 분당구, 경주시)
+_SGG_RE = re.compile(r"([가-힣A-Za-z]+(?:시|군|구))")
+# 동/읍/면/리/ ~가 (예: 신내동, 현곡면, 삼향읍, 장충동1가)
+_DONG_RE = re.compile(r"([가-힣A-Za-z0-9]+(?:동|읍|면|리)(?:\d*가)?)")
 
-# -구 단위 행정구 이름 뽑아 냄
-def _extract_gu_from_text(text: Optional[str]) -> Optional[str]:
+# 시/군/구, 동/읍/면/리/..가 추출 (공백 유지한 토큰 기반)
+def extract_sgg_and_optional_dong(text: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     if not text:
-        return None
-    # 공백 기준 우선
-    for tok in str(text).split():
-        if tok.endswith("구"):
-            return tok
-    # 공백 없앨 때도 탐색
-    m = _GU_PAT.search(str(text).replace(" ", ""))
-    return m.group(1) if m else None
+        return None, None
+
+    tokens = [t for t in str(text).strip().split() if t]  # 공백 분리 토큰
+    sgg = None
+    dong = None
+
+    # 마지막으로 등장한 시/군/구를 sgg로
+    for tok in tokens:
+        if tok.endswith(("시", "군", "구")):
+            sgg = tok
+
+    # 동/읍/면/리/..가 한 개 추출 (첫 번째로 등장한 걸 사용)
+    for tok in tokens:
+        if re.search(r"(동|읍|면|리)(\d*가)?$", tok):
+            dong = tok
+            break
+
+    return sgg, dong
+
+
+# 주소 필터: 공백 무시하고 포함 여부 비교
+def match_by_sgg_and_dong(place: Dict[str, Any], sgg: Optional[str], dong: Optional[str]) -> bool:
+    if not sgg:
+        return True
+
+    addr = f"{place.get('road_address_name','')} {place.get('address_name','')}"
+    addr_ns = addr.replace(" ", "")
+    sgg_ns = sgg.replace(" ", "")
+    if sgg_ns not in addr_ns:
+        return False
+
+    if dong:
+        dong_ns = dong.replace(" ", "")
+        if dong_ns not in addr_ns:
+            return False
+
+    return True
+
+# # -구 형태의 문자열을 찾는다
+# _GU_PAT = re.compile(r"([가-힣A-Za-z]+구)")
+
+# # -구 단위 행정구 이름 뽑아 냄
+# def _extract_gu_from_text(text: Optional[str]) -> Optional[str]:
+#     if not text:
+#         return None
+#     # 공백 기준 우선
+#     for tok in str(text).split():
+#         if tok.endswith("구"):
+#             return tok
+#     # 공백 없앨 때도 탐색
+#     m = _GU_PAT.search(str(text).replace(" ", ""))
+#     return m.group(1) if m else None
 
 # -구가 포함되어 있어야 최종 return되게 설정
 def _place_in_gu(place: Dict[str, Any], target_gu: str) -> bool:
@@ -280,10 +326,32 @@ async def search_places_rect_sweep(
             await asyncio.gather(*tasks, return_exceptions=True)
 
     # 4) (선택) -구 필터 후처리
+    # if restrict_by_query_text:
+    #     gu = _extract_gu_from_text(restrict_by_query_text)  # "서울 중랑구" -> "중랑구"
+    #     if gu:
+    #         results = [p for p in results if _place_in_gu(p, gu)]
+    # 4) SGG(+동) 필터 후처리
+    # if restrict_by_query_text:
+    #     sgg, dong = extract_sgg_and_optional_dong(restrict_by_query_text)
+    #     if sgg:
+    #         results = [p for p in results if match_by_sgg_and_dong(p, sgg, dong)]
+    # 4) SGG(+동) 필터 후처리
     if restrict_by_query_text:
-        gu = _extract_gu_from_text(restrict_by_query_text)  # "서울 중랑구" -> "중랑구"
-        if gu:
-            results = [p for p in results if _place_in_gu(p, gu)]
+        sgg, dong = extract_sgg_and_optional_dong(restrict_by_query_text)
+        print(f"[DEBUG] 입력 query='{restrict_by_query_text}', 추출된 SGG={sgg}, DONG={dong}")
+        before = len(results)
+        if sgg:
+            filtered = []
+            for p in results:
+                ok = match_by_sgg_and_dong(p, sgg, dong)
+                if not ok:
+                    print(f"[FILTER-OUT] {p.get('place_name')} / {p.get('address_name')}")
+                else:
+                    filtered.append(p)
+            results = filtered
+        print(f"[DEBUG] 필터 전={before}, 후={len(results)}")
+
+
 
     # 5) 최대 개수만 리턴
     return results[:total_limit]

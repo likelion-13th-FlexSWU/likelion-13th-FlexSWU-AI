@@ -8,7 +8,7 @@ import random
 
 # ai_service는 그대로 사용
 from .ai_service import get_gpt_embedding, generate_place_description
-from .map_service import geocode_address, search_places_around, search_places_rect_sweep
+from .map_service import geocode_address, search_places_around, search_places_rect_sweep, extract_sgg_and_optional_dong
 from .models import UserKeywords
 from .models import UserKeywordsWithLocation
 from .models import RecommendationRequest
@@ -36,6 +36,16 @@ async def get_recommendations(user_input: RecommendationRequest):
         
         x, y = geo_info["x"], geo_info["y"]
 
+        sgg, dong = extract_sgg_and_optional_dong(geo_info["address"])
+
+        # 구/동 여부에 따라 범위 설정
+        if dong:
+            span_m = 10000  # 동 단위이면 더 좁은 범위
+            step_m = 2000
+        else:
+            span_m = 20000  # 구 단위이면 넓은 범위
+            step_m = 4000
+
         # 2. rect-sweep으로 장소 검색 (기존 로직 대체)
         places = await search_places_rect_sweep(
             center_x=x,
@@ -43,8 +53,8 @@ async def get_recommendations(user_input: RecommendationRequest):
             keyword=place_category,
             category_code=None, # 이 예시에서는 keyword만 사용
             total_limit=200,    # 총 200개 검색
-            span_m=20000,
-            step_m=4000,
+            span_m=span_m,
+            step_m=step_m,
             concurrency=8,
             restrict_by_query_text=search_query,
         )
@@ -183,6 +193,16 @@ async def rect_sweep(
         "total": len(places),
         "places": places,
     }
+
+@app.get("/test-geocode")
+async def test_geocode(
+    query: str = Query(..., description="예: 서울 중랑구 신내동(법정동/행정동/구/시 모두 가능)")
+):
+    geo = await geocode_address(query)
+    if not geo:
+        raise HTTPException(status_code=404, detail="지오코딩 결과가 없습니다. 주소를 확인하세요.")
+    return {"query": query, "result": geo}
+
 
 @app.get("/")
 def read_root():
