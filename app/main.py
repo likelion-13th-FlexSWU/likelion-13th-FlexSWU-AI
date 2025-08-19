@@ -41,25 +41,33 @@ async def get_recommendations(user_input: RecommendationRequest):
         # 구/동 여부에 따라 범위 설정 / 더 세부적으로 하고 싶으면 step_m을 더 작은 사각형으로 쪼개면 됨
         if dong:
             span_m = 10000  # 동 단위이면 더 좁은 범위
-            step_m = 1000
-            sample_tile_count = 30
+            # step_m = 1000
+            # sample_tile_count = 30
         else:
             span_m = 20000  # 구 단위이면 넓은 범위
-            step_m = 1000
-            sample_tile_count = 60
+            # step_m = 1000
+            # sample_tile_count = 60
 
         # 2. rect-sweep으로 장소 검색 (기존 로직 대체)
-        places = await search_places_rect_sweep(
-            center_x=x,
-            center_y=y,
+        # places = await search_places_rect_sweep(
+        #     center_x=x,
+        #     center_y=y,
+        #     keyword=place_category,
+        #     category_code=None, # 이 예시에서는 keyword만 사용
+        #     total_limit=500,    # 몇 개 검색할 건지?
+        #     span_m=span_m,
+        #     step_m=step_m,
+        #     concurrency=8,
+        #     restrict_by_query_text=search_query,
+        #     sample_tile_count=sample_tile_count
+        # )
+        # fallback 로직으로 확장
+        places = await fetch_places_with_fallback(
+            x=x,
+            y=y,
             keyword=place_category,
-            category_code=None, # 이 예시에서는 keyword만 사용
-            total_limit=500,    # 몇 개 검색할 건지?
-            span_m=span_m,
-            step_m=step_m,
-            concurrency=8,
-            restrict_by_query_text=search_query,
-            sample_tile_count=sample_tile_count
+            restrict_text=search_query,
+            dong=(span_m <= 15000)
         )
 
         # 30개 랜덤 추출 > 랜덤 제외하려면 이 부분 주석
@@ -170,19 +178,28 @@ async def rect_sweep(
         raise HTTPException(status_code=404, detail="지오코딩 결과 없음")
     x, y = geo["x"], geo["y"]
 
-    # 2) rect 스윕 호출
-    places = await search_places_rect_sweep(
-        center_x=x,
-        center_y=y,
+    # # 2) rect 스윕 호출
+    # places = await search_places_rect_sweep(
+    #     center_x=x,
+    #     center_y=y,
+    #     keyword=keyword,
+    #     category_code=category_code,
+    #     total_limit=total_limit,
+    #     span_m=span_m,
+    #     step_m=step_m,
+    #     concurrency=concurrency,
+    #     restrict_by_query_text=query,
+    #     sample_tile_count=sample_tile_count
+    # )
+    # 2) fallback 포함된 확장 탐색
+    places = await fetch_places_with_fallback(
+        x=x,
+        y=y,
         keyword=keyword,
-        category_code=category_code,
-        total_limit=total_limit,
-        span_m=span_m,
-        step_m=step_m,
-        concurrency=concurrency,
-        restrict_by_query_text=query,
-        sample_tile_count=sample_tile_count
+        restrict_text=query,
+        dong=(span_m <= 15000)  # 또는 동단위 여부 판단 기준
     )
+
 
     # 30개 랜덤 추출 > 랜덤 제외하려면 이 부분 주석
     if len(places) > 30:
@@ -212,3 +229,107 @@ async def test_geocode(
 @app.get("/")
 def read_root():
     return {"message": "Hello FastAPI!"}
+
+
+
+### fallback 기반 장소 검색 함수 추가
+#JPN_SYNONYMS = ["일식", "스시", "초밥", "라멘", "돈카츠", "덮밥"]
+
+async def fetch_places_with_fallback(*, x: float, y: float, keyword: str, restrict_text: str, dong: bool) -> List[dict]:
+    CATEGORY_KEYWORD_EXPANSION = {
+    # "일식": ["돈카츠", "초밥", "오마카세", "텐동", "우동"],
+    # "카페": ["디저트", "브런치", "커피", "케이크", "티카페"],
+    # "중식": ["마라탕", "짜장면", "양꼬치", "중국집"],
+    # "한식": ["국밥", "비빔밥", "된장찌개", "한정식", "청국장"],
+    # "분식": ["떡볶이", "김밥", "순대", "튀김"],
+    }
+    base_span = 10000 if dong else 20000
+    base_step = 1000
+    base_sample = 30 if dong else 60
+    # expanded_span = 16000 if dong else 28000
+    sample_progression = (
+        [30, 50, 70, 100, None] if dong else
+        [60, 80, 100, 120, None]
+    )
+
+    # Step 1: 같은 샘플 개수로 최대 3회 시도
+    for _ in range(3):
+        places = await search_places_rect_sweep(
+        center_x=x,
+        center_y=y,
+        keyword=keyword,
+        category_code=None,
+        total_limit=500,
+        span_m=base_span,
+        step_m=base_step,
+        concurrency=8,
+        restrict_by_query_text=restrict_text,
+        sample_tile_count=base_sample
+    )
+        if len(places) >= 2:
+            return places
+
+    # Step 2: 샘플 개수 늘려가며 시도
+    for sample_tile_count in sample_progression[1:]:
+        places = await search_places_rect_sweep(
+            center_x=x,
+            center_y=y,
+            keyword=keyword,
+            category_code=None,
+            total_limit=500,
+            span_m=base_span,
+            step_m=base_step,
+            concurrency=8,
+            restrict_by_query_text=restrict_text,
+            sample_tile_count=sample_tile_count
+        )
+        if len(places) >= 1:
+            return places
+
+    # # Step n: 범위 확장 > 추후 고려
+    # places = await search_places_rect_sweep(
+    #     center_x=x,
+    #     center_y=y,
+    #     keyword=keyword,
+    #     category_code=None,
+    #     total_limit=700,
+    #     span_m=expanded_span,
+    #     step_m=base_step,
+    #     concurrency=8,
+    #     restrict_by_query_text=restrict_text,
+    #     sample_tile_count=None
+    # )
+    # if len(places) >= 5:
+    #     return places
+
+    # Step 3: 키워드 확장
+    places = []
+    seen_ids = set()
+    alts = CATEGORY_KEYWORD_EXPANSION.get(keyword, [])
+
+    for alt in alts:
+        if alt == keyword:
+            continue
+        extra = await search_places_rect_sweep(
+            center_x=x,
+            center_y=y,
+            keyword=alt,
+            category_code=None,
+            total_limit=500,
+            span_m=base_span,
+            step_m=base_step,
+            concurrency=8,
+            restrict_by_query_text=restrict_text,
+            sample_tile_count=None
+        )
+        for p in extra:
+            pid = p.get("id")
+            if pid and pid not in seen_ids:
+                places.append(p)
+                seen_ids.add(pid)
+
+    # 최종 조건 확인
+    if len(places) >= 2:
+        return places
+
+    return places
