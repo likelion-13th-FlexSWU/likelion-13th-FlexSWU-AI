@@ -215,6 +215,52 @@ async def rect_sweep(
         "total": len(places),
         "places": places,
     }
+#fallback 없는 테스트 api
+@app.get("/rect-sweep-test")
+async def rect_sweep(
+    query: str = Query(..., description="예: 서울 종로구"),
+    keyword: Optional[str] = Query(None, description="예: 카페 (없으면 카테고리로만 탐색)"),
+    category_code: Optional[str] = Query(None, description="예: 카페 CE7, 편의점 CS2"),
+    total_limit: int = Query(200, ge=1, le=1000),
+    span_m: int = Query(20000, ge=1000, le=40000, description="전체 박스 크기(미터)"),
+    step_m: int = Query(4000, ge=500, le=10000, description="타일 간격(미터)"),
+    concurrency: int = Query(8, ge=1, le=32),
+    sample_tile_count: Optional[int] = Query(None, ge=1, le=500, description="타일 중 샘플링 개수 (예: 60개만 선택)")
+):
+    # 1) 중심 좌표 구하기
+    geo = await geocode_address(query)
+    if not geo:
+        raise HTTPException(status_code=404, detail="지오코딩 결과 없음")
+    x, y = geo["x"], geo["y"]
+
+    # 2) rect 스윕 호출
+    places = await search_places_rect_sweep(
+        center_x=x,
+        center_y=y,
+        keyword=keyword,
+        category_code=category_code,
+        total_limit=total_limit,
+        span_m=span_m,
+        step_m=step_m,
+        concurrency=concurrency,
+        restrict_by_query_text=query,
+        sample_tile_count=sample_tile_count
+    )
+
+    # 30개 랜덤 추출 > 랜덤 제외하려면 이 부분 주석
+    if len(places) > 30:
+        places = random.sample(places, 30)
+
+    return {
+        "query": query,
+        "center": {"x": x, "y": y, "address": geo["address"]},
+        "keyword": keyword,
+        "category_code": category_code,
+        "span_m": span_m,
+        "step_m": step_m,
+        "total": len(places),
+        "places": places,
+    }
 
 @app.get("/test-geocode")
 async def test_geocode(
