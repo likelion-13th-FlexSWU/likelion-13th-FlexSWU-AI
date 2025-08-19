@@ -1,6 +1,7 @@
 # app/main.py
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi.responses import JSONResponse
 from sklearn.metrics.pairwise import cosine_similarity
 import asyncio
 from typing import Dict, Any, List, Optional, Literal
@@ -184,6 +185,17 @@ async def rect_sweep(
         "places": places,
     }
 
-@app.get("/")
-def read_root():
-    return {"message": "Hello FastAPI!"}
+@app.get("/") 
+async def root(msg: str = Query(None, description="Spring에서 전달한 값")):
+    """
+    Spring → FastAPI 요청 값(msg)을 그대로 응답으로 리턴
+    """
+    return {"echo": msg}
+
+@app.post("/")
+async def root_post(request: Request):
+    """
+    POST 요청일 때는 body 전체를 그대로 돌려줌
+    """
+    data = await request.json()
+    return JSONResponse(content=data)
