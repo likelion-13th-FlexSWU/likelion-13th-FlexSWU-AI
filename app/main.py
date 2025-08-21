@@ -1,17 +1,20 @@
-# app/main.py
-
 from fastapi import FastAPI, HTTPException, Query
 from sklearn.metrics.pairwise import cosine_similarity
 import asyncio
 from typing import Dict, Any, List, Optional, Literal
 import random
+import numpy as np
+import os
+import joblib
 
 # ai_service는 그대로 사용
 from .ai_service import get_gpt_embedding, generate_place_description
 from .map_service import geocode_address, search_places_around, search_places_rect_sweep, extract_sgg_and_optional_dong
 from .models import UserKeywords
 from .models import UserKeywordsWithLocation
-from .models import RecommendationRequest
+from .db_service import get_all_user_behavior_data 
+from models.model_service import get_user_cluster, train_and_save_model, CATEGORIES 
+from models.models import RecommendationRequest, UserBehaviorData
 
 
 app = FastAPI()
@@ -115,6 +118,55 @@ async def get_recommendations(user_input: RecommendationRequest):
         raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"내부 서버 오류: {e}")
+
+# 모델 파일이 없으면 시작 시 학습 및 저장
+if not os.path.exists('user_kmeans_model.pkl'):
+    train_and_save_model()
+
+@app.post("/user-cluster")
+async def get_user_cluster_endpoint(user_behavior: UserBehaviorData):
+    """
+    사용자의 행동 데이터를 받아 클러스터를 예측하고 반환합니다.
+    """
+    # UserBehaviorData 모델의 필드를 CATEGORIES 순서에 맞는 NumPy 배열로 변환
+    user_features = np.array([
+        user_behavior.family_friendly,
+        user_behavior.date_friendly,
+        user_behavior.pet_friendly,
+        user_behavior.solo_friendly,
+        user_behavior.quiet,
+        user_behavior.cozy,
+        user_behavior.focus,
+        user_behavior.noisy,
+        user_behavior.lively,
+        user_behavior.diverse_menu,
+        user_behavior.book_friendly,
+        user_behavior.plants,
+        user_behavior.trendy,
+        user_behavior.photo_friendly,
+        user_behavior.good_view,
+        user_behavior.spacious,
+        user_behavior.aesthetic,
+        user_behavior.long_stay,
+        user_behavior.good_music,
+        user_behavior.exotic
+    ])
+    
+    cluster_id = get_user_cluster(user_features)
+
+     # 데이터 부족 시 처리
+    if cluster_id is None:
+        return {"user_id": user_behavior.user_id, "cluster": "데이터 부족", "message": "사용자 데이터가 부족하여 유형을 분류할 수 없습니다."}
+    
+    # 클러스터 ID에 따라 사용자 유형 반환
+    user_type = {
+        0: "소확행",  
+        1: "느좋러",  
+        2: "입문자",
+        3: "인싸"   
+    }
+    
+    return {"user_id": user_behavior.user_id, "cluster": user_type.get(cluster_id, "알 수 없음")}
 
 def _dedup(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     seen = set()
