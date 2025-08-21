@@ -1,4 +1,7 @@
-from fastapi import FastAPI, HTTPException, Query
+# app/main.py
+
+from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi.responses import JSONResponse
 from sklearn.metrics.pairwise import cosine_similarity
 import asyncio
 from typing import Dict, Any, List, Optional, Literal
