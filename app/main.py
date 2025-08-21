@@ -10,8 +10,8 @@ import joblib
 # ai_service는 그대로 사용
 from .ai_service import get_gpt_embedding, generate_place_description
 from .map_service import geocode_address, search_places_around, search_places_rect_sweep, extract_sgg_and_optional_dong
-from .models import UserKeywords
-from .models import UserKeywordsWithLocation
+# from .models import UserKeywords
+# from .models import UserKeywordsWithLocation
 from .db_service import get_all_user_behavior_data 
 from models.model_service import get_user_cluster, train_and_save_model, CATEGORIES 
 from models.models import RecommendationRequest, UserBehaviorData
@@ -91,6 +91,9 @@ async def get_recommendations(user_input: RecommendationRequest):
                 "place_name": place.get("place_name"),
                 "category_name": place.get("category_name"),
                 "address_name": place.get("address_name"),
+                "road_address_name": place.get("road_address_name"),
+                "phone": place.get("phone"),
+                "place_url": place.get("place_url"),
                 "description": description,
                 "embedding": description_embedding
             }
@@ -106,13 +109,31 @@ async def get_recommendations(user_input: RecommendationRequest):
                 "place_name": p["place_name"],
                 "category_name": p["category_name"],
                 "address_name": p["address_name"],
+                "road_address_name": p.get("road_address_name"),
+                "phone": p.get("phone"),
+                "place_url": p.get("place_url"),
                 "description": p["description"],
                 "similarity_score": similarity_score
             })
             
         # 6. 유사도 점수 내림차순 정렬 및 상위 5개 반환
         sorted_recommendations = sorted(recommendations, key=lambda x: x["similarity_score"], reverse=True)
-        return {"recommendations": sorted_recommendations[:5]}
+        
+        # 필요한 필드만 추려서 응답
+        trimmed_response = [
+            {
+                "name": r["place_name"],
+                "category": r["category_name"],
+                "address_road": r.get("road_address_name"),
+                "address_ex": r["address_name"],
+                "phone": r.get("phone"),
+                "url": r.get("place_url"),
+                "score": round(float(r["similarity_score"]), 4)
+            }
+            for r in sorted_recommendations[:5]
+        ]
+
+        return {"recommendations": trimmed_response}
 
     except HTTPException as e:
         raise e
