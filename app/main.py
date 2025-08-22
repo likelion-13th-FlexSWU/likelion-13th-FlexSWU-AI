@@ -7,7 +7,7 @@ import asyncio
 from typing import Dict, Any, List, Optional, Literal
 import random
 import numpy as np
-import os
+import os, re
 import joblib
 
 from .ai_service import get_gpt_embedding, generate_place_description
@@ -24,9 +24,17 @@ app = FastAPI()
 def calculate_cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
     return cosine_similarity([vec1], [vec2])[0][0]
 
+# 중복 제거 함수
+def normalize(s: str) -> str:
+    return re.sub(r"\s+", " ", s.strip().lower())
+
+def place_key(name: str, address: Optional[str]) -> str:
+    return f"{normalize(name)}|{normalize(address or '')}"
+
 @app.post("/recommendations", response_model=Dict[str, Any])
 async def get_recommendations(user_input: RecommendationRequest):
     try:
+        print("previous_places 확인:", user_input.previous_places)
         user_mood_keywords = user_input.mood_keywords
         place_category = user_input.place_category
         search_query = user_input.search_query
