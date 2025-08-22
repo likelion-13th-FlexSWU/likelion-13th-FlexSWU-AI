@@ -8,10 +8,15 @@ class UserKeywordsWithLocation(BaseModel):
     keywords: list[str]
     query: str
 
+class PreviousPlace(BaseModel):
+    name: str
+    address: Optional[str]
+
 class RecommendationRequest(BaseModel):
     mood_keywords: List[str]
     place_category: str
     search_query: str
+    previous_places: Optional[List[PreviousPlace]] = None
 
 # 20개 카테고리 선택 횟수를 담을 모델
 class UserBehaviorData(BaseModel):
