@@ -90,6 +90,36 @@ async def get_recommendations(user_input: RecommendationRequest):
         if not places:
             raise HTTPException(status_code=404, detail="검색된 장소가 없습니다. 키워드를 변경하거나 범위를 넓혀보세요.")
 
+        # 중복 제거
+        previous_place_keys = {
+            place_key(p.name, p.address) for p in (user_input.previous_places or [])
+        }
+        original_len = len(places)
+        places = [
+            p for p in places
+            if place_key(p["place_name"], p["address_name"]) not in previous_place_keys
+        ]
+        print(f"중복 필터링: {original_len} → {len(places)}")
+
+        # 4. 중복으로 다 빠진 경우 → 무조건 재탐색
+        if not places:
+            print("모든 후보가 중복됨 → fallback 재탐색 실행")
+            retry_places = await fetch_places_with_fallback(
+                x=x,
+                y=y,
+                keyword=place_category,
+                restrict_text=search_query,
+                dong=(span_m <= 15000)
+            )
+            places = [
+                p for p in retry_places
+                if place_key(p["place_name"], p["address_name"]) not in previous_place_keys
+            ]
+            print(f"재탐색 후 후보 개수: {len(places)}")
+
+            if not places:
+                raise HTTPException(status_code=404, detail="중복처리: 재탐색 후에도 추천 가능한 장소가 없습니다.")
+
         # 3. 사용자 무드 키워드 임베딩
         user_keyword_embedding = await get_gpt_embedding(user_mood_keywords)
 
@@ -372,9 +402,9 @@ def read_root():
 #JPN_SYNONYMS = ["일식", "스시", "초밥", "라멘", "돈카츠", "덮밥"]
 
 async def fetch_places_with_fallback(*, x: float, y: float, keyword: str, restrict_text: str, dong: bool) -> List[dict]:
-    CATEGORY_KEYWORD_EXPANSION = {
-    # "일식": ["돈카츠", "초밥", "오마카세", "텐동", "우동"],
-    # "카페": ["디저트", "브런치", "커피", "케이크", "티카페"],
+    CATEGORY_KEYWORD_EXPANSION = { #키워드를 더 늘려서 검색
+    "술집": ["호프집"],
+    "디자인문구": ["소품샵"],
     # "중식": ["마라탕", "짜장면", "양꼬치", "중국집"],
     # "한식": ["국밥", "비빔밥", "된장찌개", "한정식", "청국장"],
     # "분식": ["떡볶이", "김밥", "순대", "튀김"],
