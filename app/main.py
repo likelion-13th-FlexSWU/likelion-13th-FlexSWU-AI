@@ -10,13 +10,12 @@ import numpy as np
 import os
 import joblib
 
-# ai_service는 그대로 사용
 from .ai_service import get_gpt_embedding, generate_place_description
 from .map_service import geocode_address, search_places_around, search_places_rect_sweep, extract_sgg_and_optional_dong
 # from .models import UserKeywords
 # from .models import UserKeywordsWithLocation
 from .db_service import get_all_user_behavior_data 
-from models.model_service import get_user_cluster, train_and_save_model, CATEGORIES 
+from models.model_service import get_user_cluster, train_and_save_model, CATEGORIES
 from models.models import RecommendationRequest, UserBehaviorData
 
 
@@ -143,6 +142,14 @@ async def get_recommendations(user_input: RecommendationRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"내부 서버 오류: {e}")
 
+@app.post("/model/train")
+async def train_model_endpoint(users_data: List[UserBehaviorData]):
+    if not users_data:
+        raise HTTPException(status_code=400, detail="학습에 필요한 사용자 데이터가 없습니다.")
+    train_and_save_model(users_data)
+    analyze_clusters() # 학습 후 클러스터 정보 출력
+    return {"message": "모델 학습이 완료되었습니다."}
+
 # 모델 파일이 없으면 시작 시 학습 및 저장
 if not os.path.exists('user_kmeans_model.pkl'):
     train_and_save_model()
@@ -176,9 +183,8 @@ async def get_user_cluster_endpoint(user_behavior: UserBehaviorData):
         user_behavior.exotic
     ])
     
-    cluster_id = get_user_cluster(user_features)
+    cluster_id = get_user_cluster(user_behavior)
 
-     # 데이터 부족 시 처리
     if cluster_id is None:
         return {"user_id": user_behavior.user_id, "cluster": "데이터 부족", "message": "사용자 데이터가 부족하여 유형을 분류할 수 없습니다."}
     

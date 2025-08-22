@@ -16,6 +16,7 @@ class RecommendationRequest(BaseModel):
 # 20개 카테고리 선택 횟수를 담을 모델
 class UserBehaviorData(BaseModel):
     user_id: int
+    survey_count: int = 0
     family_friendly: int = 0
     date_friendly: int = 0
     pet_friendly: int = 0
