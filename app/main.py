@@ -28,8 +28,13 @@ def calculate_cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
 def normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip().lower())
 
-def place_key(name: str, address: Optional[str]) -> str:
+def place_key(name: str, address: str) -> str:
     return f"{normalize(name)}|{normalize(address or '')}"
+
+def safe_attr(obj: Any, key: str):
+    if isinstance(obj, dict):         # dict이면 .get
+        return obj.get(key)
+    return getattr(obj, key, None)    # 객체면 .name, .address 접근
 
 @app.post("/recommendations", response_model=Dict[str, Any])
 async def get_recommendations(user_input: RecommendationRequest):
@@ -88,37 +93,53 @@ async def get_recommendations(user_input: RecommendationRequest):
             places = random.sample(places, 30)
         
         if not places:
-            raise HTTPException(status_code=404, detail="검색된 장소가 없습니다. 키워드를 변경하거나 범위를 넓혀보세요.")
+            #raise HTTPException(status_code=404, detail="검색된 장소가 없습니다. 키워드를 변경하거나 범위를 넓혀보세요.")
+            return {"recommendations": []}
 
-        # 중복 제거
-        previous_place_keys = {
-            place_key(p.name, p.address) for p in (user_input.previous_places or [])
-        }
-        original_len = len(places)
-        places = [
-            p for p in places
-            if place_key(p["place_name"], p["address_name"]) not in previous_place_keys
-        ]
-        print(f"중복 필터링: {original_len} → {len(places)}")
+        # --- 중복 제거 ---
+        previous_places = user_input.previous_places or []
 
-        # 4. 중복으로 다 빠진 경우 → 무조건 재탐색
-        if not places:
-            print("모든 후보가 중복됨 → fallback 재탐색 실행")
-            retry_places = await fetch_places_with_fallback(
-                x=x,
-                y=y,
-                keyword=place_category,
-                restrict_text=search_query,
-                dong=(span_m <= 15000)
-            )
+        # previous_places가 존재할 때만 중복 제거
+        if previous_places:
+            #  previous_places 장소들의 도로명 주소를 set 으로 정규화해서 저장
+            previous_place_keys = {
+                normalize(p.address or "")
+                for p in previous_places
+                if p.address # address 값이 none 이 아닌 경우만
+            }
+
+            original_len = len(places)
+
+            # 이번 검색 결과(places)에서 previous_places에 포함된 주소는 제거
             places = [
-                p for p in retry_places
-                if place_key(p["place_name"], p["address_name"]) not in previous_place_keys
+                p for p in places
+                if normalize(p.get("road_address_name") or "") not in previous_place_keys
             ]
-            print(f"재탐색 후 후보 개수: {len(places)}")
 
+            print(f"중복 필터링: {original_len} → {len(places)}")
+            print("previous_place_keys:", previous_place_keys)
+            print("places sample:", [normalize(p.get("road_address_name") or "") for p in places[:5]])
+
+            # 중복으로 다 빠진 경우 → 무조건 재탐색
             if not places:
-                raise HTTPException(status_code=404, detail="중복처리: 재탐색 후에도 추천 가능한 장소가 없습니다.")
+                print("모든 후보가 중복됨 → fallback 재탐색 실행")
+                retry_places = await fetch_places_with_fallback(
+                    x=x,
+                    y=y,
+                    keyword=place_category,
+                    restrict_text=search_query,
+                    dong=(span_m <= 15000)
+                )
+                # 재탐색 결과에서도 previous_place_keys 에 포함된 건 제거
+                places = [
+                    p for p in retry_places
+                    if normalize(p.get("road_address_name") or "") not in previous_place_keys
+                ]
+
+                print(f"재탐색 후 후보 개수: {len(places)}")
+                
+                if not places:
+                    return {"recommendations": []} #재탐색까지 했는데 중복 제거 후 후보가 하나도 없을 때 > 빈 배열 리턴
 
         # 3. 사용자 무드 키워드 임베딩
         user_keyword_embedding = await get_gpt_embedding(user_mood_keywords)
@@ -404,7 +425,7 @@ def read_root():
 async def fetch_places_with_fallback(*, x: float, y: float, keyword: str, restrict_text: str, dong: bool) -> List[dict]:
     CATEGORY_KEYWORD_EXPANSION = { #키워드를 더 늘려서 검색
     "술집": ["호프집"],
-    "디자인문구": ["소품샵"],
+    "디자인문구": ["소품샵", "문구"],
     # "중식": ["마라탕", "짜장면", "양꼬치", "중국집"],
     # "한식": ["국밥", "비빔밥", "된장찌개", "한정식", "청국장"],
     # "분식": ["떡볶이", "김밥", "순대", "튀김"],
