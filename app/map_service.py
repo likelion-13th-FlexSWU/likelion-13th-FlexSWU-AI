@@ -374,7 +374,7 @@ async def search_places_rect_sweep(
     return results[:total_limit]
 
 
-# 텍스트 주소 > 위도 경도 반환
+#텍스트 주소 > 위도 경도 반환
 async def geocode_address(query: str) -> Optional[Dict[str, Any]]:
     if not HEADERS:
         print("[KAKAO] Missing KAKAO_API_KEY")
@@ -389,6 +389,35 @@ async def geocode_address(query: str) -> Optional[Dict[str, Any]]:
         addr_obj = doc.get("road_address") or doc.get("address") or {}
         addr_text = addr_obj.get("address_name") or query
         return {"x": float(doc["x"]), "y": float(doc["y"]), "address": addr_text}
+    
+#텍스트 주소 > 위도 경도 + 현재 날씨 반환
+async def geocode_address_weather(x: float, y: float) -> Optional[str]:
+    """
+    OpenWeatherMap API 호출해서 현재 날씨 상태(main)만 반환
+    ex) "Clear", "Clouds", "Rain"
+    """
+    OPENWEATHER_KEY = os.getenv("OPENWEATHER_KEY")
+    if not OPENWEATHER_KEY:
+        print("[OPENWEATHER] Missing OPENWEATHER_KEY")
+        return None
+
+    params = {
+        "lat": y,   # 위도
+        "lon": x,   # 경도
+        "appid": OPENWEATHER_KEY,
+        "units": "metric",
+        "lang": "kr"
+    }
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.get("https://api.openweathermap.org/data/2.5/weather", params=params)
+            r.raise_for_status()
+            data = r.json()
+            return data["weather"][0]["main"]  # "Clear" / "Clouds" / "Rain"
+        except Exception as e:
+            print(f"[OPENWEATHER] error: {e}")
+            return None
 
 # 좌표 주변 반경에서 키워드 1회 호출로 결과를 가져온다 > /geocode에서 사용함
 async def search_places_around(
