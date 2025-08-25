@@ -11,7 +11,7 @@ import os, re
 import joblib
 
 from .ai_service import get_gpt_embedding, generate_place_description
-from .map_service import geocode_address, search_places_around, search_places_rect_sweep, extract_sgg_and_optional_dong
+from .map_service import geocode_address, search_places_around, search_places_rect_sweep, extract_sgg_and_optional_dong, geocode_address_weather
 # from .models import UserKeywords
 # from .models import UserKeywordsWithLocation
 from .db_service import get_all_user_behavior_data 
@@ -37,15 +37,24 @@ def safe_attr(obj: Any, key: str):
     return getattr(obj, key, None)    # 객체면 .name, .address 접근
 
 @app.post("/recommendations", response_model=Dict[str, Any])
-async def get_recommendations(user_input: RecommendationRequest):
+async def get_recommendations(
+        user_input: RecommendationRequest,
+        weather: Optional[bool] = Query(None, description="날씨 반영 여부")):
     try:
         print("previous_places 확인:", user_input.previous_places)
         user_mood_keywords = user_input.mood_keywords
         place_category = user_input.place_category
         search_query = user_input.search_query
         
-        if not user_mood_keywords or not place_category or not search_query:
-            raise HTTPException(status_code=400, detail="모든 필드를 제공해주세요.")
+        # weather 기반 추천일 때는 search_query만 필수
+        if weather:
+            if not search_query:
+                raise HTTPException(status_code=400, detail="검색 쿼리를 제공해주세요.")
+        else:
+            # 기본 추천일 때는 mood_keywords / place_category / search_query 다 필수
+            if not user_mood_keywords or not place_category or not search_query:
+                raise HTTPException(status_code=400, detail="모든 필드를 제공해주세요.")
+
 
         # 1. 주소 지오코딩
         geo_info = await geocode_address(search_query)
@@ -80,6 +89,62 @@ async def get_recommendations(user_input: RecommendationRequest):
         #     sample_tile_count=sample_tile_count
         # )
         # fallback 로직으로 확장
+
+        # 날씨 기반 추천 로직
+        if weather:
+            # (1) 날씨 API 호출
+            weather_status = await geocode_address_weather(x, y)  # clear, Clouds, Rain 중 하나 반환하도록 구현
+
+            # (2) 해당 날씨에 맞는 키워드 목록
+            keywords = WEATHER_KEYWORDS.get(weather_status, [])
+
+            base_span = 10000 if dong else 20000
+            base_step = 1000
+            base_sample = 20 if dong else 30
+
+            # (3) 각 키워드마다 rect-sweep 검색 (fallback X)
+            all_candidates = []
+            for kw in keywords:
+                results = await search_places_rect_sweep(
+                    center_x=x,
+                    center_y=y,
+                    keyword=kw,
+                    category_code=None,
+                    total_limit=50,
+                    span_m=base_span,
+                    step_m=base_step,
+                    concurrency=8,
+                    restrict_by_query_text=search_query,
+                    sample_tile_count=base_sample
+                )
+                # 랜덤 샘플링으로 5개 뽑기
+                if len(results) > 5:
+                    sampled = random.sample(results, 5)
+                else:
+                    sampled = results
+
+                all_candidates.extend(sampled)
+
+            # (4) 최종 후보 중에서 랜덤 5개 추출
+            if len(all_candidates) > 5:
+                all_candidates = random.sample(all_candidates, 5)
+
+            # 결과 정리
+            trimmed_response = [
+                {
+                    "name": p.get("place_name"),
+                    "category": p.get("category_name"),
+                    "address_road": p.get("road_address_name"),
+                    "address_ex": p.get("address_name"),
+                    "phone": p.get("phone"),
+                    "url": p.get("place_url")
+                }
+                for p in all_candidates
+            ]
+            return {"recommendations": trimmed_response}
+        
+
+        # 기존 추천 로직    
         places = await fetch_places_with_fallback(
             x=x,
             y=y,
@@ -417,6 +482,14 @@ async def test_geocode(
 def read_root():
     return {"message": "Hello FastAPI!"}
 
+# 날씨 반환 테스트
+@app.get("/weather-geocode")
+async def weather_geocode(query: str):
+    geo = await geocode_address_weather(query)   # 여기 맞춰주기
+    if not geo:
+        raise HTTPException(status_code=404, detail="지오코딩 결과가 없습니다.")
+    return geo
+
 
 
 ### fallback 기반 장소 검색 함수 추가
@@ -520,3 +593,9 @@ async def fetch_places_with_fallback(*, x: float, y: float, keyword: str, restri
         return places
 
     return places
+
+WEATHER_KEYWORDS = {
+    "Clear": ["냉면", "삼계탕"],
+    "Clouds": ["칼국수", "샤브샤브"],
+    "Rain": ["파전", "짬뽕", "감자탕"]
+}
