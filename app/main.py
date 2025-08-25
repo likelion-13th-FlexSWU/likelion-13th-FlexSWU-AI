@@ -141,7 +141,10 @@ async def get_recommendations(
                 }
                 for p in all_candidates
             ]
-            return {"recommendations": trimmed_response}
+            return {
+                "weather": weather_status,
+                "recommendations": trimmed_response
+            }
         
 
         # 기존 추천 로직    
