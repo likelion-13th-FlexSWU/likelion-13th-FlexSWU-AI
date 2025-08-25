@@ -13,8 +13,8 @@ class PreviousPlace(BaseModel):
     address: Optional[str]
 
 class RecommendationRequest(BaseModel):
-    mood_keywords: List[str]
-    place_category: str
+    mood_keywords: Optional[List[str]] = None
+    place_category: Optional[str] = None
     search_query: str
     previous_places: Optional[List[PreviousPlace]] = None
 

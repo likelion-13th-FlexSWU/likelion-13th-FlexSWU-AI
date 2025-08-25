@@ -100,7 +100,7 @@ async def get_recommendations(
 
             base_span = 10000 if dong else 20000
             base_step = 1000
-            base_sample = 20 if dong else 30
+            base_sample = 30 if dong else 60
 
             # (3) 각 키워드마다 rect-sweep 검색 (fallback X)
             all_candidates = []
@@ -117,6 +117,19 @@ async def get_recommendations(
                     restrict_by_query_text=search_query,
                     sample_tile_count=base_sample
                 )
+                if not results:
+                    results = await search_places_rect_sweep(
+                        center_x=x,
+                        center_y=y,
+                        keyword=kw,
+                        category_code=None,
+                        total_limit=80,
+                        span_m=base_span * 2,   # 반경 확장
+                        step_m=base_step,
+                        concurrency=8,
+                        restrict_by_query_text=search_query,
+                        sample_tile_count=base_sample
+                    )
                 # 랜덤 샘플링으로 5개 뽑기
                 if len(results) > 5:
                     sampled = random.sample(results, 5)
